@@ -25,6 +25,7 @@ import { InputHandler } from 'directive/input-handler';
 import { MovableOption } from 'directive/movable.directive';
 import { RotableOption } from 'directive/rotable.directive';
 import { ContextMenuSeparator, ContextMenuService } from 'service/context-menu.service';
+import { ImageService } from 'service/image.service';
 import { PanelOption, PanelService } from 'service/panel.service';
 import { PointerDeviceService } from 'service/pointer-device.service';
 
@@ -68,7 +69,7 @@ export class CardStackComponent implements OnInit, AfterViewInit, OnDestroy {
   get ownerName(): string { return this.cardStack.ownerName; }
 
   get topCard(): Card { return this.cardStack.topCard; }
-  get imageFile(): ImageFile { return this.cardStack.imageFile; }
+  get imageFile(): ImageFile { return this.imageService.getSkeletonOr(this.cardStack.imageFile); }
 
   animeState: string = 'inactive';
 
@@ -91,6 +92,7 @@ export class CardStackComponent implements OnInit, AfterViewInit, OnDestroy {
     private panelService: PanelService,
     private elementRef: ElementRef<HTMLElement>,
     private changeDetector: ChangeDetectorRef,
+    private imageService: ImageService,
     private pointerDeviceService: PointerDeviceService
   ) { }
 
@@ -107,9 +109,12 @@ export class CardStackComponent implements OnInit, AfterViewInit, OnDestroy {
         if (!this.cardStack || !object) return;
         if ((this.cardStack === object)
           || (object instanceof ObjectNode && this.cardStack.contains(object))
-          || (object instanceof PeerCursor && object.peerId === this.cardStack.owner)) {
+          || (object instanceof PeerCursor && object.userId === this.cardStack.owner)) {
           this.changeDetector.markForCheck();
         }
+      })
+      .on('CARD_STACK_DECREASED', event => {
+        if (event.data.cardStackIdentifier === this.cardStack.identifier && this.cardStack) this.changeDetector.markForCheck();
       })
       .on('SYNCHRONIZE_FILE_LIST', event => {
         this.changeDetector.markForCheck();
@@ -118,7 +123,8 @@ export class CardStackComponent implements OnInit, AfterViewInit, OnDestroy {
         this.changeDetector.markForCheck();
       })
       .on('DISCONNECT_PEER', event => {
-        if (this.cardStack.owner === event.data.peer) this.changeDetector.markForCheck();
+        let cursor = PeerCursor.findByPeerId(event.data.peerId);
+        if (!cursor || this.cardStack.owner === cursor.userId) this.changeDetector.markForCheck();
       });
     this.movableOption = {
       tabletopObject: this.cardStack,
@@ -131,8 +137,10 @@ export class CardStackComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   ngAfterViewInit() {
-    this.input = new InputHandler(this.elementRef.nativeElement);
-    this.input.onStart = this.onInputStart.bind(this);
+    this.ngZone.runOutsideAngular(() => {
+      this.input = new InputHandler(this.elementRef.nativeElement);
+    });
+    this.input.onStart = e => this.ngZone.run(() => this.onInputStart(e));
   }
 
   ngOnDestroy() {
@@ -168,17 +176,29 @@ export class CardStackComponent implements OnInit, AfterViewInit, OnDestroy {
     }
   }
 
-  onDoubleClick(e) {
+  startDoubleClickTimer(e) {
     if (!this.doubleClickTimer) {
-      this.doubleClickTimer = setTimeout(() => {
-        clearTimeout(this.doubleClickTimer);
-        this.doubleClickTimer = null;
-      }, 300);
+      this.stopDoubleClickTimer();
+      this.doubleClickTimer = setTimeout(() => this.stopDoubleClickTimer(), e.touches ? 500 : 300);
       this.doubleClickPoint = this.input.pointer;
       return;
     }
+
+    if (e.touches) {
+      this.input.onEnd = this.onDoubleClick.bind(this);
+    } else {
+      this.onDoubleClick();
+    }
+  }
+
+  stopDoubleClickTimer() {
     clearTimeout(this.doubleClickTimer);
     this.doubleClickTimer = null;
+    this.input.onEnd = null;
+  }
+
+  onDoubleClick() {
+    this.stopDoubleClickTimer();
     let distance = (this.doubleClickPoint.x - this.input.pointer.x) ** 2 + (this.doubleClickPoint.y - this.input.pointer.y) ** 2;
     if (distance < 10 ** 2) {
       console.log('onDoubleClick !!!!');
@@ -195,11 +215,9 @@ export class CardStackComponent implements OnInit, AfterViewInit, OnDestroy {
   }
 
   onInputStart(e: MouseEvent | TouchEvent) {
-    this.input.cancel();
+    this.startDoubleClickTimer(e);
     this.cardStack.toTopmost();
-    this.onDoubleClick(e);
-
-    if (e instanceof MouseEvent) this.startIconHiddenTimer();
+    this.startIconHiddenTimer();
 
     EventSystem.trigger('SELECT_TABLETOP_OBJECT', { identifier: this.cardStack.identifier, className: 'GameCharacter' });
   }
@@ -408,7 +426,7 @@ export class CardStackComponent implements OnInit, AfterViewInit, OnDestroy {
     let coordinate = this.pointerDeviceService.pointers[0];
     let option: PanelOption = { left: coordinate.x - 200, top: coordinate.y - 300, width: 400, height: 600 };
 
-    this.cardStack.owner = Network.peerId;
+    this.cardStack.owner = Network.peerContext.userId;
     let component = this.panelService.open<CardStackListComponent>(CardStackListComponent, option);
     component.cardStack = gameObject;
   }

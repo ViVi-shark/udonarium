@@ -1,12 +1,12 @@
 import { AfterViewInit, Component, NgZone, OnDestroy, ViewChild, ViewContainerRef } from '@angular/core';
 
-import { ChatTab } from '@udonarium/chat-tab';
+import { ChatTabList } from '@udonarium/chat-tab-list';
 import { AudioPlayer } from '@udonarium/core/file-storage/audio-player';
 import { AudioSharingSystem } from '@udonarium/core/file-storage/audio-sharing-system';
 import { AudioStorage } from '@udonarium/core/file-storage/audio-storage';
 import { FileArchiver } from '@udonarium/core/file-storage/file-archiver';
 import { ImageFile } from '@udonarium/core/file-storage/image-file';
-import { FileSharingSystem } from '@udonarium/core/file-storage/image-sharing-system';
+import { ImageSharingSystem } from '@udonarium/core/file-storage/image-sharing-system';
 import { ImageStorage } from '@udonarium/core/file-storage/image-storage';
 import { ObjectFactory } from '@udonarium/core/synchronize-object/object-factory';
 import { ObjectSerializer } from '@udonarium/core/synchronize-object/object-serializer';
@@ -20,14 +20,17 @@ import { PeerCursor } from '@udonarium/peer-cursor';
 import { PresetSound, SoundEffect } from '@udonarium/sound-effect';
 
 import { ChatWindowComponent } from 'component/chat-window/chat-window.component';
+import { ContextMenuComponent } from 'component/context-menu/context-menu.component';
 import { FileStorageComponent } from 'component/file-storage/file-storage.component';
 import { GameCharacterGeneratorComponent } from 'component/game-character-generator/game-character-generator.component';
 import { GameCharacterSheetComponent } from 'component/game-character-sheet/game-character-sheet.component';
 import { GameObjectInventoryComponent } from 'component/game-object-inventory/game-object-inventory.component';
 import { GameTableSettingComponent } from 'component/game-table-setting/game-table-setting.component';
 import { JukeboxComponent } from 'component/jukebox/jukebox.component';
+import { ModalComponent } from 'component/modal/modal.component';
 import { PeerMenuComponent } from 'component/peer-menu/peer-menu.component';
 import { TextViewComponent } from 'component/text-view/text-view.component';
+import { UIPanelComponent } from 'component/ui-panel/ui-panel.component';
 import { AppConfig, AppConfigService } from 'service/app-config.service';
 import { ChatMessageService } from 'service/chat-message.service';
 import { ContextMenuService } from 'service/context-menu.service';
@@ -47,6 +50,8 @@ export class AppComponent implements AfterViewInit, OnDestroy {
   private immediateUpdateTimer: NodeJS.Timer = null;
   private lazyUpdateTimer: NodeJS.Timer = null;
   private openPanelCount: number = 0;
+  isSaveing: boolean = false;
+  progresPercent: number = 0;
 
   constructor(
     private modalService: ModalService,
@@ -62,7 +67,7 @@ export class AppComponent implements AfterViewInit, OnDestroy {
       EventSystem;
       Network;
       FileArchiver.instance.initialize();
-      FileSharingSystem.instance.initialize();
+      ImageSharingSystem.instance.initialize();
       ImageStorage.instance;
       AudioSharingSystem.instance.initialize();
       AudioStorage.instance;
@@ -74,6 +79,7 @@ export class AppComponent implements AfterViewInit, OnDestroy {
     this.appConfigService.initialize();
     this.pointerDeviceService.initialize();
 
+    ChatTabList.instance.initialize();
     DataSummarySetting.instance.initialize();
 
     let diceBot: DiceBot = new DiceBot('DiceBot');
@@ -85,13 +91,8 @@ export class AppComponent implements AfterViewInit, OnDestroy {
     let soundEffect: SoundEffect = new SoundEffect('SoundEffect');
     soundEffect.initialize();
 
-    let chatTab: ChatTab = new ChatTab('MainTab');
-    chatTab.name = 'メインタブ';
-    chatTab.initialize();
-
-    chatTab = new ChatTab('SubTab');
-    chatTab.name = 'サブタブ';
-    chatTab.initialize();
+    ChatTabList.instance.addChatTab('メインタブ', 'MainTab');
+    ChatTabList.instance.addChatTab('サブタブ', 'SubTab');
 
     let fileContext = ImageFile.createEmpty('none_icon').toContext();
     fileContext.url = './assets/images/ic_account_circle_black_24dp_2x.png';
@@ -140,7 +141,7 @@ export class AppComponent implements AfterViewInit, OnDestroy {
       .on('SYNCHRONIZE_AUDIO_LIST', event => { if (event.isSendFromSelf) this.lazyNgZoneUpdate(false); })
       .on('SYNCHRONIZE_FILE_LIST', event => { if (event.isSendFromSelf) this.lazyNgZoneUpdate(false); })
       .on<AppConfig>('LOAD_CONFIG', event => {
-        console.log('LOAD_CONFIG !!!', event.data);
+        console.log('LOAD_CONFIG !!!');
         Network.setApiKey(event.data.webrtc.key);
         Network.open();
       })
@@ -148,11 +149,12 @@ export class AppComponent implements AfterViewInit, OnDestroy {
         this.lazyNgZoneUpdate(false);
       })
       .on('OPEN_NETWORK', event => {
-        console.log('OPEN_NETWORK', event.data.peer);
-        PeerCursor.myCursor.peerId = event.data.peer;
+        console.log('OPEN_NETWORK', event.data.peerId);
+        PeerCursor.myCursor.peerId = Network.peerContext.peerId;
+        PeerCursor.myCursor.userId = Network.peerContext.userId;
       })
       .on('CLOSE_NETWORK', event => {
-        console.log('CLOSE_NETWORK', event.data.peer);
+        console.log('CLOSE_NETWORK', event.data.peerId);
         this.ngZone.run(async () => {
           if (1 < Network.peerIds.length) {
             await this.modalService.open(TextViewComponent, { title: 'ネットワークエラー', text: 'ネットワーク接続に何らかの異常が発生しました。\nこの表示以後、接続が不安定であれば、ページリロードと再接続を試みてください。' });
@@ -164,9 +166,10 @@ export class AppComponent implements AfterViewInit, OnDestroy {
       })
       .on('CONNECT_PEER', event => {
         if (event.isSendFromSelf) this.chatMessageService.calibrateTimeOffset();
+        this.lazyNgZoneUpdate(event.isSendFromSelf);
       })
       .on('DISCONNECT_PEER', event => {
-        //
+        this.lazyNgZoneUpdate(event.isSendFromSelf);
       });
   }
 
@@ -222,16 +225,29 @@ export class AppComponent implements AfterViewInit, OnDestroy {
     }
   }
 
-  save() {
+  async save() {
+    if (this.isSaveing) return;
+    this.isSaveing = true;
+    this.progresPercent = 0;
+
     let roomName = Network.peerContext && 0 < Network.peerContext.roomName.length
       ? Network.peerContext.roomName
       : 'ルームデータ';
-    this.saveDataService.saveRoom(roomName);
+    await this.saveDataService.saveRoomAsync(roomName, percent => {
+      this.progresPercent = percent;
+    });
+
+    setTimeout(() => {
+      this.isSaveing = false;
+      this.progresPercent = 0;
+    }, 500);
   }
 
   handleFileSelect(event: Event) {
-    let files = (<HTMLInputElement>event.target).files;
+    let input = <HTMLInputElement>event.target;
+    let files = input.files;
     if (files.length) FileArchiver.instance.load(files);
+    input.value = '';
   }
 
   private lazyNgZoneUpdate(isImmediate: boolean) {
@@ -258,3 +274,7 @@ export class AppComponent implements AfterViewInit, OnDestroy {
     }
   }
 }
+
+PanelService.UIPanelComponentClass = UIPanelComponent;
+ContextMenuService.ContextMenuComponentClass = ContextMenuComponent;
+ModalService.ModalComponentClass = ModalComponent;

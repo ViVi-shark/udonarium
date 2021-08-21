@@ -37,7 +37,7 @@ export class JukeboxComponent implements OnInit, OnDestroy {
   ) { }
 
   ngOnInit() {
-    this.modalService.title = this.panelService.title = 'ジュークボックス'
+    Promise.resolve().then(() => this.modalService.title = this.panelService.title = 'ジュークボックス');
     this.auditionPlayer.volumeType = VolumeType.AUDITION;
     EventSystem.register(this)
       .on('*', event => {
@@ -67,8 +67,10 @@ export class JukeboxComponent implements OnInit, OnDestroy {
   }
 
   handleFileSelect(event: Event) {
-    let files = (<HTMLInputElement>event.target).files;
+    let input = <HTMLInputElement>event.target;
+    let files = input.files;
     if (files.length) FileArchiver.instance.load(files);
+    input.value = '';
   }
 
   private lazyNgZoneUpdate() {

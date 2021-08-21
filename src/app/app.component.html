@@ -44,16 +44,22 @@
         <a routerLink="/" routerLinkActive="active">
           <label>
             <div><i class="material-icons">open_in_browser</i></div>
-            <div>ファイル読込</div>
+            <div>ZIP読込</div>
             <input type="file" style="display: none;" (change)="handleFileSelect($event)" multiple
-              accept="image/*,audio/*,application/zip" />
+              accept="application/xml,text/xml,application/zip" />
           </label>
         </a>
       </li>
-      <li (click)="save()">
+      <li *ngIf="!isSaveing" (click)="save()">
         <a routerLink="/" routerLinkActive="active">
           <div><i class="material-icons">sd_storage</i></div>
           <div>保存</div>
+        </a>
+      </li>
+      <li *ngIf="isSaveing" style="pointer-events: none;">
+        <a>
+          <div><i class="material-icons vibration-amine">sd_storage</i></div>
+          <div>{{progresPercent}}%</div>
         </a>
       </li>
     </ul>

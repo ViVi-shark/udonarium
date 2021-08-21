@@ -34,7 +34,7 @@ export class FileSelecterComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   ngOnInit() {
-    this.modalService.title = this.panelService.title = 'ファイル一覧';
+    Promise.resolve().then(() => this.modalService.title = this.panelService.title = 'ファイル一覧');
   }
 
   ngAfterViewInit() {
@@ -50,7 +50,6 @@ export class FileSelecterComponent implements OnInit, OnDestroy, AfterViewInit {
   }
 
   onSelectedFile(file: ImageFile) {
-    console.log('onSelectedFile', file);
     EventSystem.call('SELECT_FILE', { fileIdentifier: file.identifier }, Network.peerId);
     this.modalService.resolve(file.identifier);
   }
